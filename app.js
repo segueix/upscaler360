@@ -7,12 +7,15 @@ const finalResolution = document.querySelector('#finalResolution');
 const ratioInfo = document.querySelector('#ratioInfo');
 const ratioWarning = document.querySelector('#ratioWarning');
 const memoryWarning = document.querySelector('#memoryWarning');
+const compatNotice = document.querySelector('#compatNotice');
+const aiWarning = document.querySelector('#aiWarning');
 const processButton = document.querySelector('#processButton');
 const progressBar = document.querySelector('#progressBar');
 const statusText = document.querySelector('#statusText');
 const outputCanvas = document.querySelector('#outputCanvas');
 const downloadLink = document.querySelector('#downloadLink');
 const formatSelect = document.querySelector('#formatSelect');
+const engineSelect = document.querySelector('#engineSelect');
 const qualityInput = document.querySelector('#qualityInput');
 const qualityOutput = document.querySelector('#qualityOutput');
 const qualityField = document.querySelector('#qualityField');
@@ -20,6 +23,7 @@ const qualityField = document.querySelector('#qualityField');
 const TARGET_RATIO = 2;
 const RATIO_TOLERANCE = 0.03;
 const TILE_SIZE = 768;
+const AI_TILE_SIZE = 256;
 const TILE_OVERLAP = 24;
 const MEMORY_WARNING_PIXELS = 48_000_000;
 const MEMORY_DANGER_PIXELS = 96_000_000;
@@ -29,6 +33,8 @@ let loadedFileName = 'imatge-360';
 let currentObjectUrl = null;
 let lastDownloadUrl = null;
 let picaInstance = null;
+let aiLibraryPromise = null;
+let aiUpscaler = null;
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ca-ES').format(value);
@@ -40,6 +46,15 @@ function formatResolution(width, height) {
 
 function getSelectedScale() {
   return Number(document.querySelector('input[name="scale"]:checked').value);
+}
+
+function getSelectedEngine() {
+  return engineSelect.value;
+}
+
+function selectScale(scale) {
+  const input = document.querySelector(`input[name="scale"][value="${scale}"]`);
+  if (input) input.checked = true;
 }
 
 function setStatus(message, progress = null) {
@@ -64,7 +79,8 @@ function baseName(fileName) {
 function updateImageInfo() {
   if (!loadedImage) return;
 
-  const scale = getSelectedScale();
+  const isAi = getSelectedEngine() === 'ai';
+  const scale = isAi ? 2 : getSelectedScale();
   const finalWidth = loadedImage.naturalWidth * scale;
   const finalHeight = loadedImage.naturalHeight * scale;
   const ratio = loadedImage.naturalWidth / loadedImage.naturalHeight;
@@ -84,10 +100,11 @@ function updateImageInfo() {
     ratioWarning.textContent = '';
   }
 
-  if (scale === 4 || finalPixels > MEMORY_WARNING_PIXELS) {
+  if (isAi || scale === 4 || finalPixels > MEMORY_WARNING_PIXELS) {
     memoryWarning.hidden = false;
     const level = finalPixels > MEMORY_DANGER_PIXELS ? 'Molt important' : 'Avís';
-    memoryWarning.textContent = `${level}: el resultat tindrà ${formatResolution(finalWidth, finalHeight)} (${formatNumber(finalPixels)} píxels) i pot requerir aproximadament ${estimatedRgbaMiB} MiB només per al llenç final. En Chromebook, prova primer 2x o una imatge més petita si Chrome es torna lent.`;
+    const aiExtra = isAi ? ' A més, el model IA necessita memòria addicional per a TensorFlow.js i per a cada rajola.' : '';
+    memoryWarning.textContent = `${level}: el resultat tindrà ${formatResolution(finalWidth, finalHeight)} (${formatNumber(finalPixels)} píxels) i pot requerir aproximadament ${estimatedRgbaMiB} MiB només per al llenç final.${aiExtra} En Chromebook, prova primer el mode ràpid pica 2x o una imatge més petita si Chrome es torna lent.`;
   } else {
     memoryWarning.hidden = true;
     memoryWarning.textContent = '';
@@ -141,7 +158,66 @@ function resizeWithCanvas(sourceCanvas, destCanvas) {
   return Promise.resolve(destCanvas);
 }
 
-async function resizeTile(sourceCanvas, destCanvas) {
+function loadScript(src, globalName) {
+  if (window[globalName]) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const existingScript = document.querySelector(`script[data-upscaler-ai="${globalName}"]`);
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error(`No s’ha pogut carregar ${globalName}.`)), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.defer = true;
+    script.dataset.upscalerAi = globalName;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`No s’ha pogut carregar ${globalName}.`));
+    document.head.appendChild(script);
+  });
+}
+
+async function loadAiLibraries() {
+  if (!aiLibraryPromise) {
+    aiLibraryPromise = loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js', 'tf')
+      .then(() => loadScript('https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js', 'DefaultUpscalerJSModel'))
+      .then(() => loadScript('https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js', 'Upscaler'))
+      .catch((error) => {
+        aiLibraryPromise = null;
+        throw error;
+      });
+  }
+  return aiLibraryPromise;
+}
+
+async function getAiUpscaler() {
+  await loadAiLibraries();
+
+  if (!window.tf || !window.Upscaler || !window.DefaultUpscalerJSModel) {
+    throw new Error('El motor IA no està disponible al navegador.');
+  }
+
+  aiUpscaler ||= new window.Upscaler({
+    model: window.DefaultUpscalerJSModel,
+  });
+
+  return aiUpscaler;
+}
+
+function imageFromSource(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('No s’ha pogut llegir la rajola generada per la IA.'));
+    img.src = src;
+  });
+}
+
+async function resizeTileWithPica(sourceCanvas, destCanvas) {
   if (window.pica) {
     picaInstance ||= window.pica({ features: ['js', 'wasm', 'ww'] });
     return picaInstance.resize(sourceCanvas, destCanvas, {
@@ -155,6 +231,25 @@ async function resizeTile(sourceCanvas, destCanvas) {
   return resizeWithCanvas(sourceCanvas, destCanvas);
 }
 
+async function resizeTileWithAi(sourceCanvas, destCanvas) {
+  const upscaler = await getAiUpscaler();
+  const upscaledSrc = await upscaler.upscale(sourceCanvas, {
+    awaitNextFrame: true,
+    output: 'base64',
+  });
+  const upscaledImage = await imageFromSource(upscaledSrc);
+  const ctx = destCanvas.getContext('2d', { alpha: true });
+  ctx.drawImage(upscaledImage, 0, 0, destCanvas.width, destCanvas.height);
+  return destCanvas;
+}
+
+async function resizeTile(sourceCanvas, destCanvas, engine) {
+  if (engine === 'ai') {
+    return resizeTileWithAi(sourceCanvas, destCanvas);
+  }
+  return resizeTileWithPica(sourceCanvas, destCanvas);
+}
+
 async function upscaleImage() {
   if (!loadedImage) return;
 
@@ -162,7 +257,9 @@ async function upscaleImage() {
   downloadLink.hidden = true;
   revokeDownloadUrl();
 
-  const scale = getSelectedScale();
+  const engine = getSelectedEngine();
+  const scale = engine === 'ai' ? 2 : getSelectedScale();
+  const tileSize = engine === 'ai' ? AI_TILE_SIZE : TILE_SIZE;
   const sourceWidth = loadedImage.naturalWidth;
   const sourceHeight = loadedImage.naturalHeight;
   const outputWidth = sourceWidth * scale;
@@ -173,19 +270,25 @@ async function upscaleImage() {
   outputCanvas.height = outputHeight;
   outputCtx.clearRect(0, 0, outputWidth, outputHeight);
 
-  const columns = Math.ceil(sourceWidth / TILE_SIZE);
-  const rows = Math.ceil(sourceHeight / TILE_SIZE);
+  const columns = Math.ceil(sourceWidth / tileSize);
+  const rows = Math.ceil(sourceHeight / tileSize);
   const totalTiles = columns * rows;
   let completedTiles = 0;
 
-  setStatus(`Preparant ${totalTiles} rajoles per a ampliació ${scale}x…`, 2);
+  const engineLabel = engine === 'ai' ? 'IA experimental 2x' : `${scale}x amb pica`;
+  setStatus(`Preparant ${totalTiles} rajoles per a ampliació ${engineLabel}…`, 2);
   await new Promise((resolve) => requestAnimationFrame(resolve));
 
   try {
-    for (let y = 0; y < sourceHeight; y += TILE_SIZE) {
-      for (let x = 0; x < sourceWidth; x += TILE_SIZE) {
-        const innerWidth = Math.min(TILE_SIZE, sourceWidth - x);
-        const innerHeight = Math.min(TILE_SIZE, sourceHeight - y);
+    if (engine === 'ai') {
+      setStatus('Carregant TensorFlow.js, UpscalerJS i el model IA 2x…', 3);
+      await getAiUpscaler();
+    }
+
+    for (let y = 0; y < sourceHeight; y += tileSize) {
+      for (let x = 0; x < sourceWidth; x += tileSize) {
+        const innerWidth = Math.min(tileSize, sourceWidth - x);
+        const innerHeight = Math.min(tileSize, sourceHeight - y);
         const sx = Math.max(0, x - TILE_OVERLAP);
         const sy = Math.max(0, y - TILE_OVERLAP);
         const sx2 = Math.min(sourceWidth, x + innerWidth + TILE_OVERLAP);
@@ -198,7 +301,7 @@ async function upscaleImage() {
         resizedTile.width = sw * scale;
         resizedTile.height = sh * scale;
 
-        await resizeTile(sourceTile, resizedTile);
+        await resizeTile(sourceTile, resizedTile, engine);
 
         const cropX = (x - sx) * scale;
         const cropY = (y - sy) * scale;
@@ -233,7 +336,11 @@ async function upscaleImage() {
     setStatus('Procés completat. Ja pots descarregar la imatge ampliada.', 100);
   } catch (error) {
     console.error(error);
-    setStatus('El procés s’ha aturat. Pot ser per falta de memòria; prova 2x o una imatge més petita.', 0);
+    if (engine === 'ai') {
+      setStatus('No s’ha pogut carregar o executar el model IA. Pots canviar el motor a “Ràpid i estable (pica)” i continuar sense IA.', 0);
+    } else {
+      setStatus('El procés s’ha aturat. Pot ser per falta de memòria; prova 2x o una imatge més petita.', 0);
+    }
   } finally {
     processButton.disabled = false;
   }
@@ -253,15 +360,37 @@ function exportCanvas(scale) {
       revokeDownloadUrl();
       lastDownloadUrl = URL.createObjectURL(blob);
       downloadLink.href = lastDownloadUrl;
-      downloadLink.download = `${loadedFileName}-${scale}x.${extension}`;
+      const engineSuffix = getSelectedEngine() === 'ai' ? 'ia-2x' : `${scale}x`;
+      downloadLink.download = `${loadedFileName}-${engineSuffix}.${extension}`;
       downloadLink.hidden = false;
       resolve();
     }, mimeType, quality);
   });
 }
 
+
+function updateEngineOptions() {
+  const isAi = getSelectedEngine() === 'ai';
+  const fourXInput = document.querySelector('input[name="scale"][value="4"]');
+
+  if (isAi) {
+    selectScale(2);
+    fourXInput.disabled = true;
+    compatNotice.innerHTML = 'El mode <strong>IA experimental 2x</strong> utilitza TensorFlow.js, UpscalerJS i un model obert 2x carregats al navegador. Si el model no es pot carregar, canvia a “Ràpid i estable (pica)” per continuar.';
+  } else {
+    fourXInput.disabled = false;
+    compatNotice.innerHTML = 'El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.';
+  }
+
+  aiWarning.hidden = !isAi;
+  downloadLink.hidden = true;
+  revokeDownloadUrl();
+  updateImageInfo();
+}
+
 imageInput.addEventListener('change', (event) => loadFile(event.target.files[0]));
 processButton.addEventListener('click', upscaleImage);
+engineSelect.addEventListener('change', updateEngineOptions);
 
 document.querySelectorAll('input[name="scale"]').forEach((input) => {
   input.addEventListener('change', updateImageInfo);
