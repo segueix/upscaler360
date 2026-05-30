@@ -57,6 +57,7 @@
           <select id="engineSelect">
             <option value="pica">Ràpid i estable (pica)</option>
             <option value="ai">IA experimental 2x</option>
+            <option value="oculus-auto">Objectiu Oculus/Quest automàtic</option>
           </select>
         </label>
 
@@ -90,7 +91,7 @@
           El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
         </div>
         <div class="notice notice--warning" id="aiWarning" hidden>
-          El mode IA experimental carrega TensorFlow.js, UpscalerJS i un model 2x al navegador. Pot ser molt més lent i consumir molta més memòria, especialment en Chromebook. Fes la comprovació IA abans de processar una imatge grossa.
+          El mode IA experimental carrega TensorFlow.js, UpscalerJS i un model 2x al navegador. Pot ser molt més lent i consumir molta més memòria, especialment en Chromebook. Fes la comprovació IA abans de processar una imatge grossa. Més iteracions no sempre vol dir més qualitat; a partir de 4x la imatge pot semblar artificial.
         </div>
         <div class="diagnostic" id="aiDiagnostic" hidden>
           <button id="aiCheckButton" class="button button--secondary" type="button">Comprova IA 2x</button>
@@ -98,6 +99,7 @@
           <p id="aiStatusText" class="diagnostic__status">La IA encara no s’ha comprovat en aquest navegador.</p>
         </div>
 
+        <div class="notice notice--info" id="oculusNotice" hidden></div>
         <div class="notice notice--warning" id="ratioWarning" hidden></div>
         <div class="notice notice--danger" id="memoryWarning" hidden></div>
 

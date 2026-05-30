@@ -11,6 +11,8 @@
   --warning-border: #f0c14b;
   --danger-bg: #fff0f0;
   --danger-border: #e45b5b;
+  --info-bg: #eef7ff;
+  --info-border: #8fc5ff;
   --shadow: 0 18px 45px rgb(25 43 75 / 10%);
 }
 
@@ -104,6 +106,7 @@ output { color: var(--muted); font-weight: 700; }
 
 .notice { margin: .75rem 0; padding: .85rem 1rem; border: 1px solid var(--border); border-radius: 14px; color: var(--muted); background: #f9fbff; }
 .notice--warning { color: #6f4f00; border-color: var(--warning-border); background: var(--warning-bg); }
+.notice--info { color: #16456f; border-color: var(--info-border); background: var(--info-bg); }
 .notice--danger { color: #8c1d1d; border-color: var(--danger-border); background: var(--danger-bg); }
 
 .actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1rem; }
