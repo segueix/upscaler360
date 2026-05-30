@@ -112,6 +112,10 @@ output { color: var(--muted); font-weight: 700; }
 .button:disabled { opacity: .5; cursor: not-allowed; }
 .button--secondary { background: #10233f; }
 .button--secondary:hover { background: #07162b; }
+.button--ghost { background: transparent; color: var(--primary); border: 1px solid var(--primary); }
+.button--ghost:hover { background: #eaf2ff; }
+.diagnostic { margin: .75rem 0; padding: .85rem 1rem; border: 1px solid var(--border); border-radius: 14px; background: #f9fbff; }
+.diagnostic__status { margin: .75rem 0 0; color: var(--muted); }
 
 progress { width: 100%; height: 1.1rem; accent-color: var(--primary); }
 #statusText { margin-bottom: 0; color: var(--muted); }

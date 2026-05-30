@@ -6,9 +6,10 @@ Aplicació web estàtica, en català, per ampliar imatges 360 equirectangulars d
 
 - Carrega imatges **JPG** o **PNG** des de l’ordinador.
 - Comprova si la imatge és aproximadament equirectangular **2:1** i mostra un avís si no ho és.
-- Permet triar el motor **Ràpid i estable (pica)** o **IA experimental 2x**.
+- Permet triar el motor **Ràpid i estable (pica)** o **IA experimental 2x**; pica continua sent el motor per defecte.
 - En mode pica, permet ampliació **2x** o **4x experimental**; el mode IA comença només amb **2x**.
-- Processa per **tiles/rajoles** amb solapament per reduir pics de memòria.
+- Inclou una comprovació **Comprova IA 2x** que carrega TensorFlow.js, UpscalerJS i el model abans de processar una imatge grossa.
+- Processa per **tiles/rajoles** amb solapament per reduir pics de memòria. En imatges 2:1, el solapament esquerra/dreta és circular per reduir costures visibles a la unió 360.
 - Mostra estat del procés i barra de progrés.
 - Manté exactament la proporció original en reconstruir la imatge final.
 - Exporta en **JPG** o **PNG**.
@@ -18,12 +19,12 @@ Aplicació web estàtica, en català, per ampliar imatges 360 equirectangulars d
 
 ## Tecnologia
 
-La interfície és HTML, CSS i JavaScript sense pas de compilació.
+La interfície és HTML, CSS i JavaScript sense pas de compilació. Les CDN estan fixades a versions concretes, no `@latest`, per evitar canvis inesperats.
 
-- **Ràpid i estable (pica)**: fa servir la llibreria oberta [pica](https://github.com/nodeca/pica) carregada des d’una CDN per redimensionar amb qualitat. Pica no és un model d’IA: reescala els píxels amb un algorisme de redimensionament d’alta qualitat. Si pica no està disponible, l’aplicació fa servir el redimensionament natiu de Canvas com a alternativa.
-- **IA experimental 2x**: carrega opcionalment [TensorFlow.js](https://www.tensorflow.org/js) i [UpscalerJS](https://upscalerjs.com/) amb el model obert `@upscalerjs/default-model`. Aquest mode intenta reconstruir detall amb una xarxa neuronal 2x, però pot afegir artefactes, ser molt més lent i consumir molta més memòria.
+- **Ràpid i estable (pica)**: fa servir la llibreria oberta [pica](https://github.com/nodeca/pica) `9.0.1` carregada des d’una CDN per redimensionar amb qualitat. Pica no és un model d’IA: reescala els píxels amb un algorisme de redimensionament d’alta qualitat. Si pica no està disponible, l’aplicació fa servir el redimensionament natiu de Canvas com a alternativa.
+- **IA experimental 2x**: carrega opcionalment [TensorFlow.js](https://www.tensorflow.org/js) `4.22.0` i [UpscalerJS](https://upscalerjs.com/) `1.0.0-beta.19` amb el model obert `@upscalerjs/default-model` `1.0.0-beta.17`. Aquest mode intenta reconstruir detall amb una xarxa neuronal 2x, però pot afegir artefactes, ser molt més lent i consumir molta més memòria.
 
-> Nota: pica continua sent el motor per defecte perquè és més estable, lleuger i adequat per a Chrome en Chromebook. El mode IA és només 2x en aquesta fase. Si TensorFlow.js, UpscalerJS o el model no es poden carregar des de la CDN, pots continuar amb el mode pica.
+> Nota: pica continua sent el motor per defecte perquè és més estable, lleuger i adequat per a Chrome en Chromebook. El mode IA és només 2x en aquesta fase. Si TensorFlow.js, UpscalerJS o el model no es poden carregar des de la CDN, l’app mostra un missatge clar i permet tornar a pica sense recarregar la pàgina.
 
 ## Ús local
 
@@ -38,6 +39,21 @@ Després obre:
 ```text
 http://localhost:8080
 ```
+
+## Proves manuals mínimes
+
+Abans de publicar una nova versió, serveix la carpeta amb `python3 -m http.server 8080`, obre `http://localhost:8080` en Chrome i comprova aquests casos:
+
+| Cas | Motor i escala | Resultat esperat |
+| --- | --- | --- |
+| JPG `1024×512` | pica `2x` | Exportació correcta a `2048×1024`, sense avís de proporció. |
+| JPG `1024×512` | IA experimental `2x` | Prem primer **Comprova IA 2x**; si la diagnosi és correcta, exportació a `2048×1024`. Si falla, missatge clar i retorn a pica sense recarregar. |
+| JPG `2048×1024` | pica `2x` | Exportació correcta a `4096×2048`; revisa especialment la costura esquerra/dreta en un visor 360. |
+| JPG `2048×1024` | IA experimental `2x` | Diagnosi IA prèvia correcta i exportació a `4096×2048`, assumint que el navegador té memòria suficient. |
+| Qualsevol imatge de prova | Exportació JPG i PNG | El botó de descàrrega genera fitxer `.jpg` amb qualitat configurada i fitxer `.png` quan es canvia el format. |
+| Imatge no `2:1` | Qualsevol motor | L’app mostra l’avís de proporció i permet continuar sota responsabilitat de l’usuari. |
+
+Per al mode IA, la comprovació ha de validar en un navegador real que es carreguen les CDN fixades de TensorFlow.js, UpscalerJS i `@upscalerjs/default-model`, i que el model pot ampliar una rajola mínima abans d’una imatge grossa.
 
 ## Publicació a GitHub Pages
 

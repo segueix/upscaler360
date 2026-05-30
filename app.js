@@ -19,6 +19,10 @@ const engineSelect = document.querySelector('#engineSelect');
 const qualityInput = document.querySelector('#qualityInput');
 const qualityOutput = document.querySelector('#qualityOutput');
 const qualityField = document.querySelector('#qualityField');
+const aiDiagnostic = document.querySelector('#aiDiagnostic');
+const aiCheckButton = document.querySelector('#aiCheckButton');
+const aiStatusText = document.querySelector('#aiStatusText');
+const fallbackPicaButton = document.querySelector('#fallbackPicaButton');
 
 const TARGET_RATIO = 2;
 const RATIO_TOLERANCE = 0.03;
@@ -27,6 +31,26 @@ const AI_TILE_SIZE = 256;
 const TILE_OVERLAP = 24;
 const MEMORY_WARNING_PIXELS = 48_000_000;
 const MEMORY_DANGER_PIXELS = 96_000_000;
+const TFJS_VERSION = '4.22.0';
+const UPSCALER_VERSION = '1.0.0-beta.19';
+const DEFAULT_MODEL_VERSION = '1.0.0-beta.17';
+const AI_SCRIPT_SOURCES = [
+  {
+    globalName: 'tf',
+    label: 'TensorFlow.js',
+    src: `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${TFJS_VERSION}/dist/tf.min.js`,
+  },
+  {
+    globalName: 'DefaultUpscalerJSModel',
+    label: '@upscalerjs/default-model',
+    src: `https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@${DEFAULT_MODEL_VERSION}/dist/umd/index.min.js`,
+  },
+  {
+    globalName: 'Upscaler',
+    label: 'UpscalerJS',
+    src: `https://cdn.jsdelivr.net/npm/upscaler@${UPSCALER_VERSION}/dist/browser/umd/upscaler.min.js`,
+  },
+];
 
 let loadedImage = null;
 let loadedFileName = 'imatge-360';
@@ -35,6 +59,8 @@ let lastDownloadUrl = null;
 let picaInstance = null;
 let aiLibraryPromise = null;
 let aiUpscaler = null;
+let aiDiagnosticState = 'idle';
+let aiDiagnosticPromise = null;
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ca-ES').format(value);
@@ -141,13 +167,58 @@ async function loadFile(file) {
   img.src = currentObjectUrl;
 }
 
-function canvasFromImagePart(image, sx, sy, sw, sh) {
+function positiveModulo(value, modulo) {
+  return ((value % modulo) + modulo) % modulo;
+}
+
+function drawWrappedHorizontalImagePart(ctx, image, sx, sy, sw, sh) {
+  let remaining = sw;
+  let destinationX = 0;
+  let sourceX = positiveModulo(sx, image.naturalWidth);
+
+  while (remaining > 0) {
+    const sliceWidth = Math.min(remaining, image.naturalWidth - sourceX);
+    ctx.drawImage(image, sourceX, sy, sliceWidth, sh, destinationX, 0, sliceWidth, sh);
+    remaining -= sliceWidth;
+    destinationX += sliceWidth;
+    sourceX = 0;
+  }
+}
+
+function canvasFromImagePart(image, sx, sy, sw, sh, wrapHorizontal = false) {
   const canvas = document.createElement('canvas');
   canvas.width = sw;
   canvas.height = sh;
   const ctx = canvas.getContext('2d', { alpha: true });
-  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  if (wrapHorizontal) {
+    drawWrappedHorizontalImagePart(ctx, image, sx, sy, sw, sh);
+  } else {
+    ctx.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+  }
+
   return canvas;
+}
+
+function isEquirectangularImage(image) {
+  const ratio = image.naturalWidth / image.naturalHeight;
+  return Math.abs(ratio - TARGET_RATIO) / TARGET_RATIO <= RATIO_TOLERANCE;
+}
+
+function getTileBounds(x, y, innerWidth, innerHeight, sourceWidth, sourceHeight, wrapHorizontal) {
+  const leftOverlap = wrapHorizontal || x > 0 ? TILE_OVERLAP : 0;
+  const rightOverlap = wrapHorizontal || x + innerWidth < sourceWidth ? TILE_OVERLAP : 0;
+  const sx = wrapHorizontal ? x - leftOverlap : Math.max(0, x - leftOverlap);
+  const sy = Math.max(0, y - TILE_OVERLAP);
+  const sx2 = wrapHorizontal ? x + innerWidth + rightOverlap : Math.min(sourceWidth, x + innerWidth + rightOverlap);
+  const sy2 = Math.min(sourceHeight, y + innerHeight + TILE_OVERLAP);
+
+  return {
+    sx,
+    sy,
+    sw: sx2 - sx,
+    sh: sy2 - sy,
+  };
 }
 
 function resizeWithCanvas(sourceCanvas, destCanvas) {
@@ -158,14 +229,14 @@ function resizeWithCanvas(sourceCanvas, destCanvas) {
   return Promise.resolve(destCanvas);
 }
 
-function loadScript(src, globalName) {
+function loadScript({ src, globalName, label }) {
   if (window[globalName]) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
     const existingScript = document.querySelector(`script[data-upscaler-ai="${globalName}"]`);
     if (existingScript) {
       existingScript.addEventListener('load', () => resolve(), { once: true });
-      existingScript.addEventListener('error', () => reject(new Error(`No s’ha pogut carregar ${globalName}.`)), { once: true });
+      existingScript.addEventListener('error', () => reject(new Error(`No s’ha pogut carregar ${label}.`)), { once: true });
       return;
     }
 
@@ -175,20 +246,20 @@ function loadScript(src, globalName) {
     script.defer = true;
     script.dataset.upscalerAi = globalName;
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`No s’ha pogut carregar ${globalName}.`));
+    script.onerror = () => reject(new Error(`No s’ha pogut carregar ${label}.`));
     document.head.appendChild(script);
   });
 }
 
 async function loadAiLibraries() {
   if (!aiLibraryPromise) {
-    aiLibraryPromise = loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js', 'tf')
-      .then(() => loadScript('https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@latest/dist/umd/index.min.js', 'DefaultUpscalerJSModel'))
-      .then(() => loadScript('https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js', 'Upscaler'))
-      .catch((error) => {
-        aiLibraryPromise = null;
-        throw error;
-      });
+    aiLibraryPromise = AI_SCRIPT_SOURCES.reduce(
+      (promise, source) => promise.then(() => loadScript(source)),
+      Promise.resolve(),
+    ).catch((error) => {
+      aiLibraryPromise = null;
+      throw error;
+    });
   }
   return aiLibraryPromise;
 }
@@ -205,6 +276,62 @@ async function getAiUpscaler() {
   });
 
   return aiUpscaler;
+}
+
+function setAiDiagnosticState(state, message) {
+  aiDiagnosticState = state;
+  aiStatusText.textContent = message;
+  aiCheckButton.disabled = state === 'checking';
+  fallbackPicaButton.hidden = state !== 'failed';
+}
+
+function createAiProbeCanvas() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 2;
+  canvas.height = 2;
+  const ctx = canvas.getContext('2d', { alpha: false });
+  ctx.fillStyle = '#0b66d8';
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(1, 0, 1, 1);
+  ctx.fillStyle = '#18a058';
+  ctx.fillRect(0, 1, 1, 1);
+  ctx.fillStyle = '#f59e0b';
+  ctx.fillRect(1, 1, 1, 1);
+  return canvas;
+}
+
+async function runAiDiagnostic() {
+  if (aiDiagnosticPromise) return aiDiagnosticPromise;
+
+  setAiDiagnosticState('checking', 'Comprovant TensorFlow.js, UpscalerJS i el model IA 2x amb una rajola mínima…');
+  aiDiagnosticPromise = (async () => {
+    const upscaler = await getAiUpscaler();
+    const probeCanvas = createAiProbeCanvas();
+    const result = await upscaler.upscale(probeCanvas, {
+      awaitNextFrame: true,
+      output: 'base64',
+    });
+    const probeImage = await imageFromSource(result);
+    if (probeImage.naturalWidth < probeCanvas.width * 2 || probeImage.naturalHeight < probeCanvas.height * 2) {
+      throw new Error('El model IA ha respost amb una mida inesperada.');
+    }
+    setAiDiagnosticState('ready', 'IA 2x comprovada: TensorFlow.js, UpscalerJS i el model han carregat i han processat una prova mínima.');
+    return true;
+  })().catch((error) => {
+    aiDiagnosticPromise = null;
+    aiUpscaler = null;
+    setAiDiagnosticState('failed', `La IA no està disponible ara: ${error.message} Pots tornar a pica sense recarregar la pàgina.`);
+    throw error;
+  });
+
+  return aiDiagnosticPromise;
+}
+
+function switchToPica(message = 'S’ha tornat al motor pica. Pots continuar sense recarregar la pàgina.') {
+  engineSelect.value = 'pica';
+  updateEngineOptions();
+  setStatus(message, 0);
 }
 
 function imageFromSource(src) {
@@ -264,6 +391,7 @@ async function upscaleImage() {
   const sourceHeight = loadedImage.naturalHeight;
   const outputWidth = sourceWidth * scale;
   const outputHeight = sourceHeight * scale;
+  const wrapHorizontal = isEquirectangularImage(loadedImage);
   const outputCtx = outputCanvas.getContext('2d', { alpha: true, willReadFrequently: false });
 
   outputCanvas.width = outputWidth;
@@ -281,22 +409,25 @@ async function upscaleImage() {
 
   try {
     if (engine === 'ai') {
-      setStatus('Carregant TensorFlow.js, UpscalerJS i el model IA 2x…', 3);
-      await getAiUpscaler();
+      setStatus('Comprovant la IA abans de processar la imatge grossa…', 3);
+      await runAiDiagnostic();
     }
 
     for (let y = 0; y < sourceHeight; y += tileSize) {
       for (let x = 0; x < sourceWidth; x += tileSize) {
         const innerWidth = Math.min(tileSize, sourceWidth - x);
         const innerHeight = Math.min(tileSize, sourceHeight - y);
-        const sx = Math.max(0, x - TILE_OVERLAP);
-        const sy = Math.max(0, y - TILE_OVERLAP);
-        const sx2 = Math.min(sourceWidth, x + innerWidth + TILE_OVERLAP);
-        const sy2 = Math.min(sourceHeight, y + innerHeight + TILE_OVERLAP);
-        const sw = sx2 - sx;
-        const sh = sy2 - sy;
+        const { sx, sy, sw, sh } = getTileBounds(
+          x,
+          y,
+          innerWidth,
+          innerHeight,
+          sourceWidth,
+          sourceHeight,
+          wrapHorizontal,
+        );
 
-        const sourceTile = canvasFromImagePart(loadedImage, sx, sy, sw, sh);
+        const sourceTile = canvasFromImagePart(loadedImage, sx, sy, sw, sh, wrapHorizontal);
         const resizedTile = document.createElement('canvas');
         resizedTile.width = sw * scale;
         resizedTile.height = sh * scale;
@@ -337,7 +468,8 @@ async function upscaleImage() {
   } catch (error) {
     console.error(error);
     if (engine === 'ai') {
-      setStatus('No s’ha pogut carregar o executar el model IA. Pots canviar el motor a “Ràpid i estable (pica)” i continuar sense IA.', 0);
+      fallbackPicaButton.hidden = false;
+      setStatus('No s’ha pogut carregar o executar el model IA. Prem “Torna a pica” o tria “Ràpid i estable (pica)” per continuar sense recarregar.', 0);
     } else {
       setStatus('El procés s’ha aturat. Pot ser per falta de memòria; prova 2x o una imatge més petita.', 0);
     }
@@ -376,13 +508,14 @@ function updateEngineOptions() {
   if (isAi) {
     selectScale(2);
     fourXInput.disabled = true;
-    compatNotice.innerHTML = 'El mode <strong>IA experimental 2x</strong> utilitza TensorFlow.js, UpscalerJS i un model obert 2x carregats al navegador. Si el model no es pot carregar, canvia a “Ràpid i estable (pica)” per continuar.';
+    compatNotice.innerHTML = `El mode <strong>IA experimental 2x</strong> utilitza TensorFlow.js ${TFJS_VERSION}, UpscalerJS ${UPSCALER_VERSION} i @upscalerjs/default-model ${DEFAULT_MODEL_VERSION} carregats al navegador. Fes servir “Comprova IA 2x” abans de processar una imatge grossa; si falla, torna a pica per continuar.`;
   } else {
     fourXInput.disabled = false;
     compatNotice.innerHTML = 'El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.';
   }
 
   aiWarning.hidden = !isAi;
+  aiDiagnostic.hidden = !isAi;
   downloadLink.hidden = true;
   revokeDownloadUrl();
   updateImageInfo();
@@ -390,6 +523,10 @@ function updateEngineOptions() {
 
 imageInput.addEventListener('change', (event) => loadFile(event.target.files[0]));
 processButton.addEventListener('click', upscaleImage);
+aiCheckButton.addEventListener('click', () => {
+  runAiDiagnostic().catch((error) => console.error(error));
+});
+fallbackPicaButton.addEventListener('click', () => switchToPica());
 engineSelect.addEventListener('change', updateEngineOptions);
 
 document.querySelectorAll('input[name="scale"]').forEach((input) => {
@@ -418,3 +555,5 @@ dropZone.addEventListener('drop', (event) => {
   dropZone.classList.remove('is-dragover');
   loadFile(event.dataTransfer.files[0]);
 });
+
+updateEngineOptions();
