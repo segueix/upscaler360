@@ -52,6 +52,14 @@
 
       <section class="card" aria-labelledby="opcions-title">
         <h2 id="opcions-title">2. Opcions d’ampliació</h2>
+        <label class="field">
+          <span>Motor d’ampliació</span>
+          <select id="engineSelect">
+            <option value="pica">Ràpid i estable (pica)</option>
+            <option value="ai">IA experimental 2x</option>
+          </select>
+        </label>
+
         <fieldset class="scale-options">
           <legend>Escala</legend>
           <label>
@@ -79,7 +87,10 @@
         </label>
 
         <div class="notice" id="compatNotice">
-          S’utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
+          El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
+        </div>
+        <div class="notice notice--warning" id="aiWarning" hidden>
+          El mode IA experimental carrega TensorFlow.js, UpscalerJS i un model 2x al navegador. Pot ser molt més lent i consumir molta més memòria, especialment en Chromebook.
         </div>
 
         <div class="notice notice--warning" id="ratioWarning" hidden></div>
