@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ca">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Ampliador d'imatges 360 equirectangulars que funciona íntegrament al navegador." />
+    <title>Upscaler 360 — ampliador equirectangular</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__content">
+        <p class="eyebrow">Aplicació web estàtica · GitHub Pages</p>
+        <h1>Upscaler 360</h1>
+        <p class="lead">
+          Amplia imatges 360 equirectangulars JPG o PNG directament a Chrome, sense backend, servidor ni API externa.
+        </p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card" aria-labelledby="carrega-title">
+        <h2 id="carrega-title">1. Carrega la imatge</h2>
+        <label class="drop-zone" for="imageInput" id="dropZone">
+          <span class="drop-zone__icon" aria-hidden="true">🌐</span>
+          <span class="drop-zone__title">Tria o arrossega una imatge 360</span>
+          <span class="drop-zone__hint">JPG o PNG, preferentment proporció 2:1</span>
+          <input id="imageInput" type="file" accept="image/jpeg,image/png" />
+        </label>
+
+        <div class="preview-grid" id="previewGrid" hidden>
+          <div>
+            <h3>Previsualització</h3>
+            <img id="previewImage" alt="Previsualització de la imatge carregada" />
+          </div>
+          <dl class="meta-list">
+            <div>
+              <dt>Resolució original</dt>
+              <dd id="originalResolution">—</dd>
+            </div>
+            <div>
+              <dt>Resolució final</dt>
+              <dd id="finalResolution">—</dd>
+            </div>
+            <div>
+              <dt>Proporció</dt>
+              <dd id="ratioInfo">—</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="opcions-title">
+        <h2 id="opcions-title">2. Opcions d’ampliació</h2>
+        <fieldset class="scale-options">
+          <legend>Escala</legend>
+          <label>
+            <input type="radio" name="scale" value="2" checked />
+            <span>2x estable</span>
+          </label>
+          <label>
+            <input type="radio" name="scale" value="4" />
+            <span>4x experimental</span>
+          </label>
+        </fieldset>
+
+        <label class="field">
+          <span>Format d’exportació</span>
+          <select id="formatSelect">
+            <option value="image/jpeg">JPG</option>
+            <option value="image/png">PNG</option>
+          </select>
+        </label>
+
+        <label class="field" id="qualityField">
+          <span>Qualitat JPG</span>
+          <input id="qualityInput" type="range" min="0.75" max="0.98" step="0.01" value="0.92" />
+          <output id="qualityOutput">92%</output>
+        </label>
+
+        <div class="notice" id="compatNotice">
+          S’utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
+        </div>
+
+        <div class="notice notice--warning" id="ratioWarning" hidden></div>
+        <div class="notice notice--danger" id="memoryWarning" hidden></div>
+
+        <div class="actions">
+          <button id="processButton" class="button" type="button" disabled>Ampliar imatge</button>
+          <a id="downloadLink" class="button button--secondary" download hidden>Descarrega el resultat</a>
+        </div>
+      </section>
+
+      <section class="card card--status" aria-labelledby="estat-title">
+        <h2 id="estat-title">3. Progrés</h2>
+        <progress id="progressBar" max="100" value="0">0%</progress>
+        <p id="statusText">Carrega una imatge per començar.</p>
+        <canvas id="outputCanvas" hidden></canvas>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>
+        Tot el processament es fa localment al navegador. No es puja cap imatge a cap servidor.
+      </p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/pica@9.0.1/dist/pica.min.js" defer></script>
+    <script src="app.js" defer></script>
+  </body>
+</html>
