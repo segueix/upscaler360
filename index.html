@@ -56,7 +56,7 @@
           <span>Motor d’ampliació</span>
           <select id="engineSelect">
             <option value="pica">Ràpid i estable (pica)</option>
-            <option value="ai">IA experimental 2x</option>
+            <option value="ai">IA ESRGAN 2x</option>
             <option value="oculus-auto">Objectiu Oculus/Quest automàtic</option>
           </select>
         </label>
@@ -83,15 +83,15 @@
 
         <label class="field" id="qualityField">
           <span>Qualitat JPG</span>
-          <input id="qualityInput" type="range" min="0.75" max="0.98" step="0.01" value="0.92" />
-          <output id="qualityOutput">92%</output>
+          <input id="qualityInput" type="range" min="0.80" max="0.98" step="0.01" value="0.95" />
+          <output id="qualityOutput">95%</output>
         </label>
 
         <div class="notice" id="compatNotice">
           El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
         </div>
         <div class="notice notice--warning" id="aiWarning" hidden>
-          El mode IA experimental carrega TensorFlow.js, UpscalerJS i un model 2x al navegador. Pot ser molt més lent i consumir molta més memòria, especialment en Chromebook. Fes la comprovació IA abans de processar una imatge grossa. Més iteracions no sempre vol dir més qualitat; a partir de 4x la imatge pot semblar artificial.
+          El mode IA ESRGAN carrega TensorFlow.js, UpscalerJS i el model ESRGAN-medium 2x al navegador. Genera detalls fotorealistes però consumeix més memòria. Optimitzat per Chromebook 8 GB amb rajoles de 384 px i neteja de memòria entre rajoles. Fes la comprovació IA abans de processar.
         </div>
         <div class="diagnostic" id="aiDiagnostic" hidden>
           <button id="aiCheckButton" class="button button--secondary" type="button">Comprova IA 2x</button>

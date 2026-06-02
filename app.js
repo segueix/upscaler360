@@ -28,8 +28,8 @@ const fallbackPicaButton = document.querySelector('#fallbackPicaButton');
 const TARGET_RATIO = 2;
 const RATIO_TOLERANCE = 0.03;
 const TILE_SIZE = 768;
-const AI_TILE_SIZE = 256;
-const TILE_OVERLAP = 24;
+const AI_TILE_SIZE = 384;
+const TILE_OVERLAP = 32;
 const MEMORY_WARNING_PIXELS = 48_000_000;
 const MEMORY_DANGER_PIXELS = 96_000_000;
 const MIN_OCULUS_WIDTH = 4096;
@@ -42,7 +42,7 @@ const MAX_AI_ITERATIONS = 2;
 const MAX_TOTAL_SCALE = 4;
 const TFJS_VERSION = '4.22.0';
 const UPSCALER_VERSION = '1.0.0-beta.19';
-const DEFAULT_MODEL_VERSION = '1.0.0-beta.17';
+const ESRGAN_MODEL_VERSION = '1.0.0-beta.17';
 const AI_SCRIPT_SOURCES = [
   {
     globalName: 'tf',
@@ -50,9 +50,9 @@ const AI_SCRIPT_SOURCES = [
     src: `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@${TFJS_VERSION}/dist/tf.min.js`,
   },
   {
-    globalName: 'DefaultUpscalerJSModel',
-    label: '@upscalerjs/default-model',
-    src: `https://cdn.jsdelivr.net/npm/@upscalerjs/default-model@${DEFAULT_MODEL_VERSION}/dist/umd/index.min.js`,
+    globalName: 'ESRGANMedium',
+    label: '@upscalerjs/esrgan-medium (2x)',
+    src: `https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-medium@${ESRGAN_MODEL_VERSION}/dist/umd/2x.min.js`,
   },
   {
     globalName: 'Upscaler',
@@ -346,12 +346,12 @@ async function loadAiLibraries() {
 async function getAiUpscaler() {
   await loadAiLibraries();
 
-  if (!window.tf || !window.Upscaler || !window.DefaultUpscalerJSModel) {
+  if (!window.tf || !window.Upscaler || !window.ESRGANMedium) {
     throw new Error('El motor IA no està disponible al navegador.');
   }
 
   aiUpscaler ||= new window.Upscaler({
-    model: window.DefaultUpscalerJSModel,
+    model: window.ESRGANMedium,
   });
 
   return aiUpscaler;
@@ -429,9 +429,9 @@ async function resizeTileWithPica(sourceCanvas, destCanvas) {
     return picaInstance.resize(sourceCanvas, destCanvas, {
       quality: 3,
       alpha: true,
-      unsharpAmount: 45,
-      unsharpRadius: 0.6,
-      unsharpThreshold: 2,
+      unsharpAmount: 80,
+      unsharpRadius: 0.8,
+      unsharpThreshold: 1,
     });
   }
   return resizeWithCanvas(sourceCanvas, destCanvas);
@@ -454,6 +454,54 @@ async function resizeTile(sourceCanvas, destCanvas, engine) {
     return resizeTileWithAi(sourceCanvas, destCanvas);
   }
   return resizeTileWithPica(sourceCanvas, destCanvas);
+}
+
+function applySharpen(canvas, amount = 0.4) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const ctx = canvas.getContext('2d', { alpha: true });
+  const stripHeight = 512;
+
+  for (let startY = 0; startY < h; startY += stripHeight) {
+    const readY = Math.max(0, startY - 1);
+    const endY = Math.min(h, startY + stripHeight);
+    const readEndY = Math.min(h, endY + 1);
+    const readH = readEndY - readY;
+    const strip = ctx.getImageData(0, readY, w, readH);
+    const src = strip.data;
+    const sw = w;
+
+    const outH = endY - startY;
+    const out = ctx.createImageData(w, outH);
+    const dst = out.data;
+
+    for (let ly = 0; ly < outH; ly++) {
+      const sy = startY + ly - readY;
+      for (let x = 0; x < w; x++) {
+        const si = (sy * sw + x) * 4;
+        const di = (ly * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          let sum = src[si + c] * 5;
+          sum -= (sy > 0 ? src[((sy - 1) * sw + x) * 4 + c] : src[si + c]);
+          sum -= (sy < readH - 1 ? src[((sy + 1) * sw + x) * 4 + c] : src[si + c]);
+          sum -= (x > 0 ? src[(sy * sw + x - 1) * 4 + c] : src[si + c]);
+          sum -= (x < w - 1 ? src[(sy * sw + x + 1) * 4 + c] : src[si + c]);
+          const sharpened = src[si + c] + (sum - src[si + c]) * amount;
+          dst[di + c] = Math.max(0, Math.min(255, Math.round(sharpened)));
+        }
+        dst[di + 3] = src[si + 3];
+      }
+    }
+
+    ctx.putImageData(out, 0, startY);
+  }
+}
+
+function forceGarbageCollection() {
+  if (window.tf && window.tf.engine) {
+    window.tf.engine().startScope();
+    window.tf.engine().endScope();
+  }
 }
 
 async function processUpscalePass({ source, scale, engine, tileSize, outputCanvasTarget, progressStart, progressEnd, label }) {
@@ -521,6 +569,8 @@ async function processUpscalePass({ source, scale, engine, tileSize, outputCanva
       completedTiles += 1;
       const progress = progressStart + (completedTiles / totalTiles) * (progressEnd - progressStart);
       setStatus(`Processant rajola ${completedTiles} de ${totalTiles} (${label})…`, progress);
+
+      if (engine === 'ai' && completedTiles % 4 === 0) forceGarbageCollection();
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
@@ -585,7 +635,7 @@ async function upscaleImage() {
     } else {
       const scale = engine === 'ai' ? 2 : getSelectedScale();
       const tileSize = engine === 'ai' ? AI_TILE_SIZE : TILE_SIZE;
-      const engineLabel = engine === 'ai' ? 'ampliació IA experimental 2x' : `ampliació ${scale}x amb pica`;
+      const engineLabel = engine === 'ai' ? 'ampliació ESRGAN 2x' : `ampliació ${scale}x amb pica`;
 
       if (engine === 'ai') {
         setStatus('Comprovant la IA abans de processar la imatge grossa…', 3);
@@ -605,9 +655,13 @@ async function upscaleImage() {
       exportScale = scale;
     }
 
-    setStatus('Generant el fitxer d’exportació…', 94);
+    setStatus(‘Aplicant sharpening final per millorar la nitidesa…’, 92);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    applySharpen(outputCanvas, engine === ‘pica’ ? 0.3 : 0.4);
+
+    setStatus(‘Generant el fitxer d’exportació…’, 96);
     await exportCanvas(exportScale);
-    setStatus('Procés completat. Ja pots descarregar la imatge ampliada.', 100);
+    setStatus(‘Procés completat. Ja pots descarregar la imatge ampliada.’, 100);
   } catch (error) {
     console.error(error);
     if (engine === 'ai' || engine === 'oculus-auto') {
@@ -656,9 +710,9 @@ function updateEngineOptions() {
     selectScale(2);
     fourXInput.disabled = true;
     if (isOculusAuto) {
-      compatNotice.innerHTML = `El mode <strong>Objectiu Oculus/Quest automàtic</strong> calcula 1 o 2 iteracions IA 2x fins a un màxim de ${MAX_TOTAL_SCALE}x i ${MAX_OUTPUT_WIDTH}×${MAX_OUTPUT_HEIGHT}. Fes servir “Comprova IA 2x” abans de processar: més iteracions no sempre vol dir més qualitat; a partir de 4x la imatge pot semblar artificial.`;
+      compatNotice.innerHTML = `El mode <strong>Objectiu Oculus/Quest automàtic</strong> utilitza ESRGAN-medium per calcular 1-2 iteracions IA 2x fins a ${MAX_TOTAL_SCALE}x i ${MAX_OUTPUT_WIDTH}×${MAX_OUTPUT_HEIGHT}. Optimitzat per Chromebook 8 GB. Fes servir “Comprova IA 2x” abans de processar.`;
     } else {
-      compatNotice.innerHTML = `El mode <strong>IA experimental 2x</strong> utilitza TensorFlow.js ${TFJS_VERSION}, UpscalerJS ${UPSCALER_VERSION} i @upscalerjs/default-model ${DEFAULT_MODEL_VERSION} carregats al navegador. Fes servir “Comprova IA 2x” abans de processar una imatge grossa; si falla, torna a pica per continuar.`;
+      compatNotice.innerHTML = `El mode <strong>IA ESRGAN 2x</strong> utilitza TensorFlow.js ${TFJS_VERSION}, UpscalerJS ${UPSCALER_VERSION} i ESRGAN-medium ${ESRGAN_MODEL_VERSION}. Genera detalls reals amb xarxa neuronal, no només interpolació. Fes servir “Comprova IA 2x” abans de processar una imatge grossa.`;
     }
   } else {
     fourXInput.disabled = false;
