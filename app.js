@@ -24,6 +24,8 @@ const aiDiagnostic = document.querySelector('#aiDiagnostic');
 const aiCheckButton = document.querySelector('#aiCheckButton');
 const aiStatusText = document.querySelector('#aiStatusText');
 const fallbackPicaButton = document.querySelector('#fallbackPicaButton');
+const autoPlanDisplay = document.querySelector('#autoPlanDisplay');
+const scaleOptions = document.querySelector('#scaleOptions');
 
 const TARGET_RATIO = 2;
 const RATIO_TOLERANCE = 0.03;
@@ -87,11 +89,6 @@ function getSelectedEngine() {
   return engineSelect.value;
 }
 
-function selectScale(scale) {
-  const input = document.querySelector(`input[name="scale"][value="${scale}"]`);
-  if (input) input.checked = true;
-}
-
 function getSourceWidth(source) {
   return source.naturalWidth || source.width;
 }
@@ -100,51 +97,79 @@ function getSourceHeight(source) {
   return source.naturalHeight || source.height;
 }
 
-function getOculusPlan(width, height) {
-  const alreadyMeetsMinimum = width >= MIN_OCULUS_WIDTH && height >= MIN_OCULUS_HEIGHT;
-  const preferredWidth = alreadyMeetsMinimum ? IDEAL_OCULUS_WIDTH : MIN_OCULUS_WIDTH;
-  const preferredHeight = alreadyMeetsMinimum ? IDEAL_OCULUS_HEIGHT : MIN_OCULUS_HEIGHT;
-  const preferredScale = Math.max(preferredWidth / width, preferredHeight / height);
-  const requiredIterations = Math.max(0, Math.ceil(Math.log2(preferredScale)));
-  const iterations = Math.min(requiredIterations, MAX_AI_ITERATIONS);
-  const totalScale = 2 ** iterations;
-  const outputWidth = width * totalScale;
-  const outputHeight = height * totalScale;
-  const reachesMinimum = outputWidth >= MIN_OCULUS_WIDTH && outputHeight >= MIN_OCULUS_HEIGHT;
-  const reachesIdeal = outputWidth === IDEAL_OCULUS_WIDTH && outputHeight === IDEAL_OCULUS_HEIGHT;
-  const exceedsOutputLimit = outputWidth > MAX_OUTPUT_WIDTH || outputHeight > MAX_OUTPUT_HEIGHT;
-  const exceedsScaleLimit = totalScale > MAX_TOTAL_SCALE;
-  const exceedsIterationLimit = requiredIterations > MAX_AI_ITERATIONS;
-  const canProcess = iterations > 0 && !exceedsOutputLimit && !exceedsScaleLimit;
-  const alreadyMeetsIdeal = width >= IDEAL_OCULUS_WIDTH && height >= IDEAL_OCULUS_HEIGHT;
-  const wantsIdeal = alreadyMeetsMinimum && !alreadyMeetsIdeal && preferredWidth <= MAX_OUTPUT_WIDTH && preferredHeight <= MAX_OUTPUT_HEIGHT;
+function getAutoPlan(w, h) {
+  var steps = [];
+  var cw = w;
+  var ch = h;
 
-  return {
-    iterations: canProcess ? iterations : 0,
-    totalScale: canProcess ? totalScale : 1,
-    outputWidth: canProcess ? outputWidth : width,
-    outputHeight: canProcess ? outputHeight : height,
-    reachesMinimum: canProcess ? reachesMinimum : alreadyMeetsMinimum,
-    reachesIdeal: canProcess ? reachesIdeal : alreadyMeetsIdeal,
-    alreadyMeetsMinimum,
-    wantsIdeal,
-    recommendationNeeded: wantsIdeal && (!canProcess || requiredIterations > MAX_AI_ITERATIONS || totalScale > MAX_TOTAL_SCALE),
-    insufficientMinimum: canProcess && !reachesMinimum,
-    blockedReason: exceedsOutputLimit
-      ? 'El càlcul superaria el límit màxim de sortida 8192×4096.'
-      : exceedsIterationLimit
-        ? 'Caldrien més de 2 iteracions IA.'
-        : exceedsScaleLimit
-          ? 'Caldria una escala total superior a 4x.'
-          : '',
-  };
+  if (cw >= IDEAL_OCULUS_WIDTH && ch >= IDEAL_OCULUS_HEIGHT) {
+    return { steps: steps, outputWidth: cw, outputHeight: ch, tier: 'ideal', needsAi: false };
+  }
+
+  if (cw >= MIN_OCULUS_WIDTH && cw * 2 > MAX_OUTPUT_WIDTH) {
+    return { steps: steps, outputWidth: cw, outputHeight: ch, tier: 'above-min', needsAi: false };
+  }
+
+  if (cw < 1024) {
+    steps.push({ engine: 'pica', scale: 2 });
+    cw *= 2;
+    ch *= 2;
+  }
+
+  var aiPasses = 0;
+  while (aiPasses < MAX_AI_ITERATIONS && cw * 2 <= MAX_OUTPUT_WIDTH && ch * 2 <= MAX_OUTPUT_HEIGHT && cw < IDEAL_OCULUS_WIDTH) {
+    steps.push({ engine: 'ai', scale: 2 });
+    cw *= 2;
+    ch *= 2;
+    aiPasses++;
+  }
+
+  var reachesMin = cw >= MIN_OCULUS_WIDTH && ch >= MIN_OCULUS_HEIGHT;
+  var reachesIdeal = cw >= IDEAL_OCULUS_WIDTH && ch >= IDEAL_OCULUS_HEIGHT;
+  var tier = reachesIdeal ? 'ideal' : reachesMin ? 'minimum' : 'below-min';
+  var needsAi = steps.some(function(s) { return s.engine === 'ai'; });
+
+  return { steps: steps, outputWidth: cw, outputHeight: ch, tier: tier, needsAi: needsAi };
 }
 
-function setStatus(message, progress = null) {
+function describeAutoPlan(plan, originalWidth, originalHeight) {
+  if (plan.steps.length === 0) {
+    if (plan.tier === 'ideal') {
+      return '<strong>Resolució ideal per Oculus.</strong> La imatge ja té ' +
+        formatResolution(originalWidth, originalHeight) +
+        '. Només s’aplicarà sharpening per millorar la nitidesa.';
+    }
+    return '<strong>Resolució acceptable per Oculus.</strong> La imatge (' +
+      formatResolution(originalWidth, originalHeight) +
+      ') ja supera el mínim. S’aplicarà sharpening. ESRGAN 2x excediria el límit de ' +
+      formatResolution(MAX_OUTPUT_WIDTH, MAX_OUTPUT_HEIGHT) + '.';
+  }
+
+  var stepsDesc = plan.steps.map(function(s) {
+    return s.engine === 'ai' ? '<strong>ESRGAN 2x</strong>' : '<strong>Pica 2x</strong>';
+  });
+  stepsDesc.push('<strong>Sharpening</strong>');
+
+  var pipeline = stepsDesc.join(' → ');
+  var tierMsg;
+  if (plan.tier === 'ideal') {
+    tierMsg = 'Arribarà a resolució ideal per Oculus/Quest.';
+  } else if (plan.tier === 'minimum') {
+    tierMsg = 'Arribarà al mínim recomanat per Oculus/Quest.';
+  } else {
+    tierMsg = 'Atenció: la imatge original és massa petita per arribar al mínim recomanat (4096×2048). El resultat serà el millor possible.';
+  }
+
+  return '<strong>Pla automàtic:</strong> ' + pipeline +
+    ' → ' + formatResolution(plan.outputWidth, plan.outputHeight) +
+    '<br>' + tierMsg;
+}
+
+function setStatus(message, progress) {
   statusText.textContent = message;
-  if (progress !== null) {
+  if (progress !== undefined && progress !== null) {
     progressBar.value = Math.max(0, Math.min(100, progress));
-    progressBar.textContent = `${Math.round(progressBar.value)}%`;
+    progressBar.textContent = Math.round(progressBar.value) + '%';
   }
 }
 
@@ -162,53 +187,61 @@ function baseName(fileName) {
 function updateImageInfo() {
   if (!loadedImage) return;
 
-  const engine = getSelectedEngine();
-  const isAi = engine === 'ai';
-  const isOculusAuto = engine === 'oculus-auto';
-  const oculusPlan = isOculusAuto ? getOculusPlan(loadedImage.naturalWidth, loadedImage.naturalHeight) : null;
-  const scale = isAi ? 2 : isOculusAuto ? oculusPlan.totalScale : getSelectedScale();
-  const finalWidth = isOculusAuto ? oculusPlan.outputWidth : loadedImage.naturalWidth * scale;
-  const finalHeight = isOculusAuto ? oculusPlan.outputHeight : loadedImage.naturalHeight * scale;
-  const ratio = loadedImage.naturalWidth / loadedImage.naturalHeight;
-  const ratioDelta = Math.abs(ratio - TARGET_RATIO) / TARGET_RATIO;
-  const finalPixels = finalWidth * finalHeight;
-  const estimatedRgbaMiB = Math.round((finalPixels * 4) / 1024 / 1024);
+  var engine = getSelectedEngine();
+  var isAuto = engine === 'auto';
+  var isAi = engine === 'ai';
+  var w = loadedImage.naturalWidth;
+  var h = loadedImage.naturalHeight;
+  var ratio = w / h;
+  var ratioDelta = Math.abs(ratio - TARGET_RATIO) / TARGET_RATIO;
 
-  originalResolution.textContent = formatResolution(loadedImage.naturalWidth, loadedImage.naturalHeight);
+  var finalWidth, finalHeight;
+  var autoPlan = null;
+
+  if (isAuto) {
+    autoPlan = getAutoPlan(w, h);
+    finalWidth = autoPlan.outputWidth;
+    finalHeight = autoPlan.outputHeight;
+  } else if (isAi) {
+    finalWidth = w * 2;
+    finalHeight = h * 2;
+  } else {
+    var scale = getSelectedScale();
+    finalWidth = w * scale;
+    finalHeight = h * scale;
+  }
+
+  var finalPixels = finalWidth * finalHeight;
+  var estimatedRgbaMiB = Math.round((finalPixels * 4) / 1024 / 1024);
+
+  originalResolution.textContent = formatResolution(w, h);
   finalResolution.textContent = formatResolution(finalWidth, finalHeight);
-  ratioInfo.textContent = `${ratio.toFixed(3)}:1`;
+  ratioInfo.textContent = ratio.toFixed(3) + ':1';
 
   if (ratioDelta > RATIO_TOLERANCE) {
     ratioWarning.hidden = false;
-    ratioWarning.textContent = `Avís: aquesta imatge no sembla equirectangular 2:1 (relació detectada ${ratio.toFixed(3)}:1). Pots continuar, però el visor 360 pot mostrar deformacions.`;
+    ratioWarning.textContent = 'Avís: aquesta imatge no sembla equirectangular 2:1 (relació detectada ' + ratio.toFixed(3) + ':1). Pots continuar, però el visor 360 pot mostrar deformacions.';
   } else {
     ratioWarning.hidden = true;
     ratioWarning.textContent = '';
   }
 
-  if (isOculusAuto && oculusPlan) {
-    oculusNotice.hidden = false;
-    if (oculusPlan.insufficientMinimum) {
-      oculusNotice.textContent = 'La imatge original és massa petita per garantir qualitat suficient en Oculus/Quest. Es pot ampliar, però no arribarà al mínim recomanat.';
-    } else if (oculusPlan.recommendationNeeded) {
-      oculusNotice.textContent = `${oculusPlan.blockedReason} Per aspirar a 8192×4096 sense superar ${MAX_AI_ITERATIONS} iteracions IA ni ${MAX_TOTAL_SCALE}x totals, és recomanable partir d’una imatge original més gran.`;
-    } else if (oculusPlan.reachesIdeal) {
-      oculusNotice.textContent = `Objectiu automàtic: ${formatResolution(oculusPlan.outputWidth, oculusPlan.outputHeight)} amb ${oculusPlan.iterations} iteració IA 2x. És l’objectiu ideal si el navegador aguanta.`;
-    } else if (oculusPlan.reachesMinimum) {
-      oculusNotice.textContent = `Objectiu automàtic: ${formatResolution(oculusPlan.outputWidth, oculusPlan.outputHeight)} amb ${oculusPlan.iterations} iteració/iteracions IA 2x. Arriba al mínim recomanat per Oculus/Quest.`;
-    } else {
-      oculusNotice.textContent = `${oculusPlan.blockedReason || 'No cal cap ampliació automàtica segura amb aquests límits.'} Es recomana partir d’una imatge original més gran.`;
-    }
+  if (isAuto && autoPlan) {
+    autoPlanDisplay.hidden = false;
+    autoPlanDisplay.innerHTML = describeAutoPlan(autoPlan, w, h);
   } else {
-    oculusNotice.hidden = true;
-    oculusNotice.textContent = '';
+    autoPlanDisplay.hidden = true;
   }
 
-  if (isAi || isOculusAuto || scale === 4 || finalPixels > MEMORY_WARNING_PIXELS) {
+  oculusNotice.hidden = true;
+  oculusNotice.textContent = '';
+
+  var usesAi = isAuto ? (autoPlan && autoPlan.needsAi) : isAi;
+  if (usesAi || finalPixels > MEMORY_WARNING_PIXELS) {
     memoryWarning.hidden = false;
-    const level = finalPixels > MEMORY_DANGER_PIXELS ? 'Molt important' : 'Avís';
-    const aiExtra = isAi || isOculusAuto ? ' A més, el model IA necessita memòria addicional per a TensorFlow.js i per a cada rajola.' : '';
-    memoryWarning.textContent = `${level}: el resultat tindrà ${formatResolution(finalWidth, finalHeight)} (${formatNumber(finalPixels)} píxels) i pot requerir aproximadament ${estimatedRgbaMiB} MiB només per al llenç final.${aiExtra} En Chromebook, prova primer el mode ràpid pica 2x o una imatge més petita si Chrome es torna lent.`;
+    var level = finalPixels > MEMORY_DANGER_PIXELS ? 'Molt important' : 'Avís';
+    var aiExtra = usesAi ? ' El model IA necessita memòria addicional per a TensorFlow.js.' : '';
+    memoryWarning.textContent = level + ': el resultat tindrà ' + formatResolution(finalWidth, finalHeight) + ' (~' + estimatedRgbaMiB + ' MiB).' + aiExtra;
   } else {
     memoryWarning.hidden = true;
     memoryWarning.textContent = '';
@@ -228,17 +261,17 @@ async function loadFile(file) {
   currentObjectUrl = URL.createObjectURL(file);
   loadedFileName = baseName(file.name);
 
-  const img = new Image();
+  var img = new Image();
   img.decoding = 'async';
-  img.onload = () => {
+  img.onload = function() {
     loadedImage = img;
     previewImage.src = currentObjectUrl;
     previewGrid.hidden = false;
     processButton.disabled = false;
-    updateImageInfo();
-    setStatus('Imatge carregada. Revisa els avisos i prem “Ampliar imatge”.', 0);
+    updateEngineOptions();
+    setStatus('Imatge carregada. Revisa el pla i prem “Ampliar imatge”.', 0);
   };
-  img.onerror = () => {
+  img.onerror = function() {
     setStatus('No s’ha pogut llegir la imatge. Prova amb un altre JPG o PNG.', 0);
     processButton.disabled = true;
   };
@@ -250,13 +283,13 @@ function positiveModulo(value, modulo) {
 }
 
 function drawWrappedHorizontalImagePart(ctx, source, sx, sy, sw, sh) {
-  let remaining = sw;
-  let destinationX = 0;
-  const sourceWidth = getSourceWidth(source);
-  let sourceX = positiveModulo(sx, sourceWidth);
+  var remaining = sw;
+  var destinationX = 0;
+  var sourceWidth = getSourceWidth(source);
+  var sourceX = positiveModulo(sx, sourceWidth);
 
   while (remaining > 0) {
-    const sliceWidth = Math.min(remaining, sourceWidth - sourceX);
+    var sliceWidth = Math.min(remaining, sourceWidth - sourceX);
     ctx.drawImage(source, sourceX, sy, sliceWidth, sh, destinationX, 0, sliceWidth, sh);
     remaining -= sliceWidth;
     destinationX += sliceWidth;
@@ -264,11 +297,11 @@ function drawWrappedHorizontalImagePart(ctx, source, sx, sy, sw, sh) {
   }
 }
 
-function canvasFromImagePart(source, sx, sy, sw, sh, wrapHorizontal = false) {
-  const canvas = document.createElement('canvas');
+function canvasFromImagePart(source, sx, sy, sw, sh, wrapHorizontal) {
+  var canvas = document.createElement('canvas');
   canvas.width = sw;
   canvas.height = sh;
-  const ctx = canvas.getContext('2d', { alpha: true });
+  var ctx = canvas.getContext('2d', { alpha: true });
 
   if (wrapHorizontal) {
     drawWrappedHorizontalImagePart(ctx, source, sx, sy, sw, sh);
@@ -280,52 +313,51 @@ function canvasFromImagePart(source, sx, sy, sw, sh, wrapHorizontal = false) {
 }
 
 function isEquirectangularImage(image) {
-  const ratio = getSourceWidth(image) / getSourceHeight(image);
+  var ratio = getSourceWidth(image) / getSourceHeight(image);
   return Math.abs(ratio - TARGET_RATIO) / TARGET_RATIO <= RATIO_TOLERANCE;
 }
 
 function getTileBounds(x, y, innerWidth, innerHeight, sourceWidth, sourceHeight, wrapHorizontal) {
-  const leftOverlap = wrapHorizontal || x > 0 ? TILE_OVERLAP : 0;
-  const rightOverlap = wrapHorizontal || x + innerWidth < sourceWidth ? TILE_OVERLAP : 0;
-  const sx = wrapHorizontal ? x - leftOverlap : Math.max(0, x - leftOverlap);
-  const sy = Math.max(0, y - TILE_OVERLAP);
-  const sx2 = wrapHorizontal ? x + innerWidth + rightOverlap : Math.min(sourceWidth, x + innerWidth + rightOverlap);
-  const sy2 = Math.min(sourceHeight, y + innerHeight + TILE_OVERLAP);
+  var leftOverlap = wrapHorizontal || x > 0 ? TILE_OVERLAP : 0;
+  var rightOverlap = wrapHorizontal || x + innerWidth < sourceWidth ? TILE_OVERLAP : 0;
+  var sx = wrapHorizontal ? x - leftOverlap : Math.max(0, x - leftOverlap);
+  var sy = Math.max(0, y - TILE_OVERLAP);
+  var sx2 = wrapHorizontal ? x + innerWidth + rightOverlap : Math.min(sourceWidth, x + innerWidth + rightOverlap);
+  var sy2 = Math.min(sourceHeight, y + innerHeight + TILE_OVERLAP);
 
-  return {
-    sx,
-    sy,
-    sw: sx2 - sx,
-    sh: sy2 - sy,
-  };
+  return { sx: sx, sy: sy, sw: sx2 - sx, sh: sy2 - sy };
 }
 
 function resizeWithCanvas(sourceCanvas, destCanvas) {
-  const ctx = destCanvas.getContext('2d', { alpha: true });
+  var ctx = destCanvas.getContext('2d', { alpha: true });
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(sourceCanvas, 0, 0, destCanvas.width, destCanvas.height);
   return Promise.resolve(destCanvas);
 }
 
-function loadScript({ src, globalName, label }) {
+function loadScript(info) {
+  var src = info.src;
+  var globalName = info.globalName;
+  var label = info.label;
+
   if (window[globalName]) return Promise.resolve();
 
-  return new Promise((resolve, reject) => {
-    const existingScript = document.querySelector(`script[data-upscaler-ai="${globalName}"]`);
+  return new Promise(function(resolve, reject) {
+    var existingScript = document.querySelector('script[data-upscaler-ai="' + globalName + '"]');
     if (existingScript) {
-      existingScript.addEventListener('load', () => resolve(), { once: true });
-      existingScript.addEventListener('error', () => reject(new Error(`No s’ha pogut carregar ${label}.`)), { once: true });
+      existingScript.addEventListener('load', function() { resolve(); }, { once: true });
+      existingScript.addEventListener('error', function() { reject(new Error('No s’ha pogut carregar ' + label + '.')); }, { once: true });
       return;
     }
 
-    const script = document.createElement('script');
+    var script = document.createElement('script');
     script.src = src;
     script.async = true;
     script.defer = true;
     script.dataset.upscalerAi = globalName;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`No s’ha pogut carregar ${label}.`));
+    script.onload = function() { resolve(); };
+    script.onerror = function() { reject(new Error('No s’ha pogut carregar ' + label + '.')); };
     document.head.appendChild(script);
   });
 }
@@ -333,9 +365,9 @@ function loadScript({ src, globalName, label }) {
 async function loadAiLibraries() {
   if (!aiLibraryPromise) {
     aiLibraryPromise = AI_SCRIPT_SOURCES.reduce(
-      (promise, source) => promise.then(() => loadScript(source)),
-      Promise.resolve(),
-    ).catch((error) => {
+      function(promise, source) { return promise.then(function() { return loadScript(source); }); },
+      Promise.resolve()
+    ).catch(function(error) {
       aiLibraryPromise = null;
       throw error;
     });
@@ -350,10 +382,7 @@ async function getAiUpscaler() {
     throw new Error('El motor IA no està disponible al navegador.');
   }
 
-  aiUpscaler ||= new window.Upscaler({
-    model: window.ESRGANMedium,
-  });
-
+  aiUpscaler = aiUpscaler || new window.Upscaler({ model: window.ESRGANMedium });
   return aiUpscaler;
 }
 
@@ -365,10 +394,10 @@ function setAiDiagnosticState(state, message) {
 }
 
 function createAiProbeCanvas() {
-  const canvas = document.createElement('canvas');
+  var canvas = document.createElement('canvas');
   canvas.width = 2;
   canvas.height = 2;
-  const ctx = canvas.getContext('2d', { alpha: false });
+  var ctx = canvas.getContext('2d', { alpha: false });
   ctx.fillStyle = '#0b66d8';
   ctx.fillRect(0, 0, 1, 1);
   ctx.fillStyle = '#f8fafc';
@@ -383,49 +412,46 @@ function createAiProbeCanvas() {
 async function runAiDiagnostic() {
   if (aiDiagnosticPromise) return aiDiagnosticPromise;
 
-  setAiDiagnosticState('checking', 'Comprovant TensorFlow.js, UpscalerJS i el model IA 2x amb una rajola mínima…');
-  aiDiagnosticPromise = (async () => {
-    const upscaler = await getAiUpscaler();
-    const probeCanvas = createAiProbeCanvas();
-    const result = await upscaler.upscale(probeCanvas, {
-      awaitNextFrame: true,
-      output: 'base64',
-    });
-    const probeImage = await imageFromSource(result);
+  setAiDiagnosticState('checking', 'Comprovant TensorFlow.js, UpscalerJS i ESRGAN-medium 2x…');
+  aiDiagnosticPromise = (async function() {
+    var upscaler = await getAiUpscaler();
+    var probeCanvas = createAiProbeCanvas();
+    var result = await upscaler.upscale(probeCanvas, { awaitNextFrame: true, output: 'base64' });
+    var probeImage = await imageFromSource(result);
     if (probeImage.naturalWidth < probeCanvas.width * 2 || probeImage.naturalHeight < probeCanvas.height * 2) {
       throw new Error('El model IA ha respost amb una mida inesperada.');
     }
-    setAiDiagnosticState('ready', 'IA 2x comprovada: TensorFlow.js, UpscalerJS i el model han carregat i han processat una prova mínima.');
+    setAiDiagnosticState('ready', 'ESRGAN 2x comprovada correctament.');
     return true;
-  })().catch((error) => {
+  })().catch(function(error) {
     aiDiagnosticPromise = null;
     aiUpscaler = null;
-    setAiDiagnosticState('failed', `La IA no està disponible ara: ${error.message} Pots tornar a pica sense recarregar la pàgina.`);
+    setAiDiagnosticState('failed', 'La IA no està disponible: ' + error.message);
     throw error;
   });
 
   return aiDiagnosticPromise;
 }
 
-function switchToPica(message = 'S’ha tornat al motor pica. Pots continuar sense recarregar la pàgina.') {
+function switchToPica() {
   engineSelect.value = 'pica';
   updateEngineOptions();
-  setStatus(message, 0);
+  setStatus('S’ha tornat al motor Pica. Pots continuar sense recarregar.', 0);
 }
 
 function imageFromSource(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
     img.decoding = 'async';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('No s’ha pogut llegir la rajola generada per la IA.'));
+    img.onload = function() { resolve(img); };
+    img.onerror = function() { reject(new Error('No s’ha pogut llegir la rajola generada per la IA.')); };
     img.src = src;
   });
 }
 
 async function resizeTileWithPica(sourceCanvas, destCanvas) {
   if (window.pica) {
-    picaInstance ||= window.pica({ features: ['js', 'wasm', 'ww'] });
+    picaInstance = picaInstance || window.pica({ features: ['js', 'wasm', 'ww'] });
     return picaInstance.resize(sourceCanvas, destCanvas, {
       quality: 3,
       alpha: true,
@@ -438,13 +464,10 @@ async function resizeTileWithPica(sourceCanvas, destCanvas) {
 }
 
 async function resizeTileWithAi(sourceCanvas, destCanvas) {
-  const upscaler = await getAiUpscaler();
-  const upscaledSrc = await upscaler.upscale(sourceCanvas, {
-    awaitNextFrame: true,
-    output: 'base64',
-  });
-  const upscaledImage = await imageFromSource(upscaledSrc);
-  const ctx = destCanvas.getContext('2d', { alpha: true });
+  var upscaler = await getAiUpscaler();
+  var upscaledSrc = await upscaler.upscale(sourceCanvas, { awaitNextFrame: true, output: 'base64' });
+  var upscaledImage = await imageFromSource(upscaledSrc);
+  var ctx = destCanvas.getContext('2d', { alpha: true });
   ctx.drawImage(upscaledImage, 0, 0, destCanvas.width, destCanvas.height);
   return destCanvas;
 }
@@ -456,37 +479,37 @@ async function resizeTile(sourceCanvas, destCanvas, engine) {
   return resizeTileWithPica(sourceCanvas, destCanvas);
 }
 
-function applySharpen(canvas, amount = 0.4) {
-  const w = canvas.width;
-  const h = canvas.height;
-  const ctx = canvas.getContext('2d', { alpha: true });
-  const stripHeight = 512;
+function applySharpen(canvas, amount) {
+  var w = canvas.width;
+  var h = canvas.height;
+  var ctx = canvas.getContext('2d', { alpha: true });
+  var stripHeight = 512;
 
-  for (let startY = 0; startY < h; startY += stripHeight) {
-    const readY = Math.max(0, startY - 1);
-    const endY = Math.min(h, startY + stripHeight);
-    const readEndY = Math.min(h, endY + 1);
-    const readH = readEndY - readY;
-    const strip = ctx.getImageData(0, readY, w, readH);
-    const src = strip.data;
-    const sw = w;
+  for (var startY = 0; startY < h; startY += stripHeight) {
+    var readY = Math.max(0, startY - 1);
+    var endY = Math.min(h, startY + stripHeight);
+    var readEndY = Math.min(h, endY + 1);
+    var readH = readEndY - readY;
+    var strip = ctx.getImageData(0, readY, w, readH);
+    var src = strip.data;
+    var sw = w;
 
-    const outH = endY - startY;
-    const out = ctx.createImageData(w, outH);
-    const dst = out.data;
+    var outH = endY - startY;
+    var out = ctx.createImageData(w, outH);
+    var dst = out.data;
 
-    for (let ly = 0; ly < outH; ly++) {
-      const sy = startY + ly - readY;
-      for (let x = 0; x < w; x++) {
-        const si = (sy * sw + x) * 4;
-        const di = (ly * w + x) * 4;
-        for (let c = 0; c < 3; c++) {
-          let sum = src[si + c] * 5;
-          sum -= (sy > 0 ? src[((sy - 1) * sw + x) * 4 + c] : src[si + c]);
-          sum -= (sy < readH - 1 ? src[((sy + 1) * sw + x) * 4 + c] : src[si + c]);
-          sum -= (x > 0 ? src[(sy * sw + x - 1) * 4 + c] : src[si + c]);
-          sum -= (x < w - 1 ? src[(sy * sw + x + 1) * 4 + c] : src[si + c]);
-          const sharpened = src[si + c] + (sum - src[si + c]) * amount;
+    for (var ly = 0; ly < outH; ly++) {
+      var sy = startY + ly - readY;
+      for (var x = 0; x < w; x++) {
+        var si = (sy * sw + x) * 4;
+        var di = (ly * w + x) * 4;
+        for (var c = 0; c < 3; c++) {
+          var val = src[si + c] * 5;
+          val -= (sy > 0 ? src[((sy - 1) * sw + x) * 4 + c] : src[si + c]);
+          val -= (sy < readH - 1 ? src[((sy + 1) * sw + x) * 4 + c] : src[si + c]);
+          val -= (x > 0 ? src[(sy * sw + x - 1) * 4 + c] : src[si + c]);
+          val -= (x < w - 1 ? src[(sy * sw + x + 1) * 4 + c] : src[si + c]);
+          var sharpened = src[si + c] + (val - src[si + c]) * amount;
           dst[di + c] = Math.max(0, Math.min(255, Math.round(sharpened)));
         }
         dst[di + 3] = src[si + 3];
@@ -504,62 +527,53 @@ function forceGarbageCollection() {
   }
 }
 
-async function processUpscalePass({ source, scale, engine, tileSize, outputCanvasTarget, progressStart, progressEnd, label }) {
-  const sourceWidth = getSourceWidth(source);
-  const sourceHeight = getSourceHeight(source);
-  const outputWidth = sourceWidth * scale;
-  const outputHeight = sourceHeight * scale;
-  const wrapHorizontal = isEquirectangularImage(source);
-  const outputCtx = outputCanvasTarget.getContext('2d', { alpha: true, willReadFrequently: false });
+async function processUpscalePass(opts) {
+  var source = opts.source;
+  var scale = opts.scale;
+  var engine = opts.engine;
+  var tileSize = opts.tileSize;
+  var outputCanvasTarget = opts.outputCanvasTarget;
+  var progressStart = opts.progressStart;
+  var progressEnd = opts.progressEnd;
+  var label = opts.label;
+
+  var sourceWidth = getSourceWidth(source);
+  var sourceHeight = getSourceHeight(source);
+  var outputWidth = sourceWidth * scale;
+  var outputHeight = sourceHeight * scale;
+  var wrapHorizontal = isEquirectangularImage(source);
+  var outputCtx = outputCanvasTarget.getContext('2d', { alpha: true, willReadFrequently: false });
 
   outputCanvasTarget.width = outputWidth;
   outputCanvasTarget.height = outputHeight;
   outputCtx.clearRect(0, 0, outputWidth, outputHeight);
 
-  const columns = Math.ceil(sourceWidth / tileSize);
-  const rows = Math.ceil(sourceHeight / tileSize);
-  const totalTiles = columns * rows;
-  let completedTiles = 0;
+  var columns = Math.ceil(sourceWidth / tileSize);
+  var rows = Math.ceil(sourceHeight / tileSize);
+  var totalTiles = columns * rows;
+  var completedTiles = 0;
 
-  setStatus(`Preparant ${totalTiles} rajoles per a ${label}…`, progressStart);
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  setStatus('Preparant ' + totalTiles + ' rajoles per a ' + label + '…', progressStart);
+  await new Promise(function(resolve) { requestAnimationFrame(resolve); });
 
-  for (let y = 0; y < sourceHeight; y += tileSize) {
-    for (let x = 0; x < sourceWidth; x += tileSize) {
-      const innerWidth = Math.min(tileSize, sourceWidth - x);
-      const innerHeight = Math.min(tileSize, sourceHeight - y);
-      const { sx, sy, sw, sh } = getTileBounds(
-        x,
-        y,
-        innerWidth,
-        innerHeight,
-        sourceWidth,
-        sourceHeight,
-        wrapHorizontal,
-      );
+  for (var y = 0; y < sourceHeight; y += tileSize) {
+    for (var x = 0; x < sourceWidth; x += tileSize) {
+      var innerWidth = Math.min(tileSize, sourceWidth - x);
+      var innerHeight = Math.min(tileSize, sourceHeight - y);
+      var bounds = getTileBounds(x, y, innerWidth, innerHeight, sourceWidth, sourceHeight, wrapHorizontal);
 
-      const sourceTile = canvasFromImagePart(source, sx, sy, sw, sh, wrapHorizontal);
-      const resizedTile = document.createElement('canvas');
-      resizedTile.width = sw * scale;
-      resizedTile.height = sh * scale;
+      var sourceTile = canvasFromImagePart(source, bounds.sx, bounds.sy, bounds.sw, bounds.sh, wrapHorizontal);
+      var resizedTile = document.createElement('canvas');
+      resizedTile.width = bounds.sw * scale;
+      resizedTile.height = bounds.sh * scale;
 
       await resizeTile(sourceTile, resizedTile, engine);
 
-      const cropX = (x - sx) * scale;
-      const cropY = (y - sy) * scale;
-      const cropWidth = innerWidth * scale;
-      const cropHeight = innerHeight * scale;
-      outputCtx.drawImage(
-        resizedTile,
-        cropX,
-        cropY,
-        cropWidth,
-        cropHeight,
-        x * scale,
-        y * scale,
-        cropWidth,
-        cropHeight,
-      );
+      var cropX = (x - bounds.sx) * scale;
+      var cropY = (y - bounds.sy) * scale;
+      var cropWidth = innerWidth * scale;
+      var cropHeight = innerHeight * scale;
+      outputCtx.drawImage(resizedTile, cropX, cropY, cropWidth, cropHeight, x * scale, y * scale, cropWidth, cropHeight);
 
       sourceTile.width = 1;
       sourceTile.height = 1;
@@ -567,55 +581,64 @@ async function processUpscalePass({ source, scale, engine, tileSize, outputCanva
       resizedTile.height = 1;
 
       completedTiles += 1;
-      const progress = progressStart + (completedTiles / totalTiles) * (progressEnd - progressStart);
-      setStatus(`Processant rajola ${completedTiles} de ${totalTiles} (${label})…`, progress);
+      var progress = progressStart + (completedTiles / totalTiles) * (progressEnd - progressStart);
+      setStatus('Processant rajola ' + completedTiles + ' de ' + totalTiles + ' (' + label + ')…', progress);
 
       if (engine === 'ai' && completedTiles % 4 === 0) forceGarbageCollection();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise(function(resolve) { setTimeout(resolve, 0); });
     }
   }
 }
 
-async function runOculusAutoUpscale() {
-  const plan = getOculusPlan(loadedImage.naturalWidth, loadedImage.naturalHeight);
-
-  if (plan.iterations < 1) {
-    const message = plan.recommendationNeeded
-      ? `${plan.blockedReason} Per aspirar a 8192×4096 sense superar ${MAX_AI_ITERATIONS} iteracions IA ni ${MAX_TOTAL_SCALE}x totals, parteix d’una imatge original més gran.`
-      : 'Aquesta imatge ja compleix els límits del mode automàtic; no s’ha aplicat cap ampliació IA.';
-    throw new Error(message);
+async function runAutoPlanSteps(plan) {
+  if (plan.steps.length === 0) {
+    outputCanvas.width = loadedImage.naturalWidth;
+    outputCanvas.height = loadedImage.naturalHeight;
+    outputCanvas.getContext('2d').drawImage(loadedImage, 0, 0);
+    return 1;
   }
 
-  setStatus('Comprovant la IA abans de processar la imatge grossa…', 3);
-  await runAiDiagnostic();
+  if (plan.needsAi) {
+    setStatus('Comprovant la IA…', 3);
+    await runAiDiagnostic();
+  }
 
-  let source = loadedImage;
-  let workingCanvas = outputCanvas;
+  var source = loadedImage;
+  var totalScale = 1;
+  var totalSteps = plan.steps.length;
 
-  for (let iteration = 1; iteration <= plan.iterations; iteration += 1) {
-    const isLastIteration = iteration === plan.iterations;
-    workingCanvas = isLastIteration ? outputCanvas : document.createElement('canvas');
-    const progressStart = 5 + ((iteration - 1) / plan.iterations) * 85;
-    const progressEnd = 5 + (iteration / plan.iterations) * 85;
+  for (var i = 0; i < totalSteps; i++) {
+    var step = plan.steps[i];
+    var isLast = i === totalSteps - 1;
+    var target = isLast ? outputCanvas : document.createElement('canvas');
+    var progressStart = 5 + (i / totalSteps) * 85;
+    var progressEnd = 5 + ((i + 1) / totalSteps) * 85;
+    var tileSize = step.engine === 'ai' ? AI_TILE_SIZE : TILE_SIZE;
+    var stepNum = i + 1;
+    var label = step.engine === 'ai'
+      ? 'ESRGAN 2x (pas ' + stepNum + ' de ' + totalSteps + ')'
+      : 'Pica 2x pre-ampliació (pas ' + stepNum + ' de ' + totalSteps + ')';
+
     await processUpscalePass({
-      source,
-      scale: 2,
-      engine: 'ai',
-      tileSize: AI_TILE_SIZE,
-      outputCanvasTarget: workingCanvas,
-      progressStart,
-      progressEnd,
-      label: `iteració IA ${iteration} de ${plan.iterations}`,
+      source: source,
+      scale: step.scale,
+      engine: step.engine === 'ai' ? 'ai' : 'pica',
+      tileSize: tileSize,
+      outputCanvasTarget: target,
+      progressStart: progressStart,
+      progressEnd: progressEnd,
+      label: label,
     });
 
     if (source instanceof HTMLCanvasElement && source !== outputCanvas) {
       source.width = 1;
       source.height = 1;
     }
-    source = workingCanvas;
+    source = target;
+    totalScale *= step.scale;
   }
 
-  return plan.totalScale;
+  return totalScale;
 }
 
 async function upscaleImage() {
@@ -625,28 +648,32 @@ async function upscaleImage() {
   downloadLink.hidden = true;
   revokeDownloadUrl();
 
-  const engine = getSelectedEngine();
+  var engine = getSelectedEngine();
 
   try {
-    let exportScale;
+    var exportScale;
+    var usedAi = false;
 
-    if (engine === 'oculus-auto') {
-      exportScale = await runOculusAutoUpscale();
+    if (engine === 'auto') {
+      var plan = getAutoPlan(loadedImage.naturalWidth, loadedImage.naturalHeight);
+      usedAi = plan.needsAi;
+      exportScale = await runAutoPlanSteps(plan);
     } else {
-      const scale = engine === 'ai' ? 2 : getSelectedScale();
-      const tileSize = engine === 'ai' ? AI_TILE_SIZE : TILE_SIZE;
-      const engineLabel = engine === 'ai' ? 'ampliació ESRGAN 2x' : `ampliació ${scale}x amb pica`;
+      var scale = engine === 'ai' ? 2 : getSelectedScale();
+      var tileSize = engine === 'ai' ? AI_TILE_SIZE : TILE_SIZE;
+      var engineLabel = engine === 'ai' ? 'ESRGAN 2x' : 'Pica ' + scale + 'x';
+      usedAi = engine === 'ai';
 
-      if (engine === 'ai') {
-        setStatus('Comprovant la IA abans de processar la imatge grossa…', 3);
+      if (usedAi) {
+        setStatus('Comprovant la IA…', 3);
         await runAiDiagnostic();
       }
 
       await processUpscalePass({
         source: loadedImage,
-        scale,
-        engine,
-        tileSize,
+        scale: scale,
+        engine: engine,
+        tileSize: tileSize,
         outputCanvasTarget: outputCanvas,
         progressStart: 5,
         progressEnd: 90,
@@ -655,20 +682,20 @@ async function upscaleImage() {
       exportScale = scale;
     }
 
-    setStatus(‘Aplicant sharpening final per millorar la nitidesa…’, 92);
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    applySharpen(outputCanvas, engine === ‘pica’ ? 0.3 : 0.4);
+    setStatus('Aplicant sharpening final…', 92);
+    await new Promise(function(resolve) { requestAnimationFrame(resolve); });
+    applySharpen(outputCanvas, usedAi ? 0.4 : 0.3);
 
-    setStatus(‘Generant el fitxer d’exportació…’, 96);
+    setStatus('Generant el fitxer d’exportació…', 96);
     await exportCanvas(exportScale);
-    setStatus(‘Procés completat. Ja pots descarregar la imatge ampliada.’, 100);
+    setStatus('Procés completat. Ja pots descarregar la imatge ampliada.', 100);
   } catch (error) {
     console.error(error);
-    if (engine === 'ai' || engine === 'oculus-auto') {
+    if (engine === 'auto' || engine === 'ai') {
       fallbackPicaButton.hidden = false;
-      setStatus(error.message || 'No s’ha pogut carregar o executar el model IA. Prem “Torna a pica” o tria “Ràpid i estable (pica)” per continuar sense recarregar.', 0);
+      setStatus(error.message || 'Error amb el model IA. Tria Pica manual per continuar.', 0);
     } else {
-      setStatus('El procés s’ha aturat. Pot ser per falta de memòria; prova 2x o una imatge més petita.', 0);
+      setStatus('El procés s’ha aturat. Pot ser per falta de memòria; prova una imatge més petita.', 0);
     }
   } finally {
     processButton.disabled = false;
@@ -676,12 +703,12 @@ async function upscaleImage() {
 }
 
 function exportCanvas(scale) {
-  return new Promise((resolve, reject) => {
-    const mimeType = formatSelect.value;
-    const extension = mimeType === 'image/png' ? 'png' : 'jpg';
-    const quality = mimeType === 'image/jpeg' ? Number(qualityInput.value) : undefined;
+  return new Promise(function(resolve, reject) {
+    var mimeType = formatSelect.value;
+    var extension = mimeType === 'image/png' ? 'png' : 'jpg';
+    var quality = mimeType === 'image/jpeg' ? Number(qualityInput.value) : undefined;
 
-    outputCanvas.toBlob((blob) => {
+    outputCanvas.toBlob(function(blob) {
       if (!blob) {
         reject(new Error('No s’ha pogut crear el fitxer de sortida.'));
         return;
@@ -689,73 +716,77 @@ function exportCanvas(scale) {
       revokeDownloadUrl();
       lastDownloadUrl = URL.createObjectURL(blob);
       downloadLink.href = lastDownloadUrl;
-      const selectedEngine = getSelectedEngine();
-      const engineSuffix = selectedEngine === 'ai' ? 'ia-2x' : selectedEngine === 'oculus-auto' ? `oculus-auto-${scale}x` : `${scale}x`;
-      downloadLink.download = `${loadedFileName}-${engineSuffix}.${extension}`;
+      var selectedEngine = getSelectedEngine();
+      var engineSuffix = selectedEngine === 'auto' ? 'auto-' + scale + 'x' : selectedEngine === 'ai' ? 'esrgan-2x' : 'pica-' + scale + 'x';
+      downloadLink.download = loadedFileName + '-' + engineSuffix + '.' + extension;
       downloadLink.hidden = false;
       resolve();
     }, mimeType, quality);
   });
 }
 
-
 function updateEngineOptions() {
-  const engine = getSelectedEngine();
-  const isAi = engine === 'ai';
-  const isOculusAuto = engine === 'oculus-auto';
-  const usesAi = isAi || isOculusAuto;
-  const fourXInput = document.querySelector('input[name="scale"][value="4"]');
+  var engine = getSelectedEngine();
+  var isAuto = engine === 'auto';
+  var isAi = engine === 'ai';
+  var isPica = engine === 'pica';
 
-  if (usesAi) {
-    selectScale(2);
-    fourXInput.disabled = true;
-    if (isOculusAuto) {
-      compatNotice.innerHTML = `El mode <strong>Objectiu Oculus/Quest automàtic</strong> utilitza ESRGAN-medium per calcular 1-2 iteracions IA 2x fins a ${MAX_TOTAL_SCALE}x i ${MAX_OUTPUT_WIDTH}×${MAX_OUTPUT_HEIGHT}. Optimitzat per Chromebook 8 GB. Fes servir “Comprova IA 2x” abans de processar.`;
-    } else {
-      compatNotice.innerHTML = `El mode <strong>IA ESRGAN 2x</strong> utilitza TensorFlow.js ${TFJS_VERSION}, UpscalerJS ${UPSCALER_VERSION} i ESRGAN-medium ${ESRGAN_MODEL_VERSION}. Genera detalls reals amb xarxa neuronal, no només interpolació. Fes servir “Comprova IA 2x” abans de processar una imatge grossa.`;
-    }
-  } else {
-    fourXInput.disabled = false;
-    compatNotice.innerHTML = 'El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.';
+  scaleOptions.hidden = !isPica;
+  autoPlanDisplay.hidden = true;
+
+  var showAiControls = isAi;
+  if (isAuto && loadedImage) {
+    var plan = getAutoPlan(loadedImage.naturalWidth, loadedImage.naturalHeight);
+    showAiControls = plan.needsAi;
+    autoPlanDisplay.hidden = false;
+    autoPlanDisplay.innerHTML = describeAutoPlan(plan, loadedImage.naturalWidth, loadedImage.naturalHeight);
   }
 
-  aiWarning.hidden = !usesAi;
-  aiDiagnostic.hidden = !usesAi;
+  if (isAuto) {
+    compatNotice.innerHTML = 'El mode <strong>automàtic</strong> analitza la resolució i decideix la millor estratègia: Pica per pre-ampliació, ESRGAN per generar detalls, i sharpening final. Optimitzat per Chromebook 8 GB i Oculus/Quest.';
+  } else if (isAi) {
+    compatNotice.innerHTML = '<strong>ESRGAN 2x manual</strong>: una passada del model ESRGAN-medium. Fes servir “Comprova IA 2x” abans de processar.';
+  } else {
+    compatNotice.innerHTML = '<strong>Pica manual</strong>: redimensionament d’alta qualitat sense IA. Ràpid i estable.';
+  }
+
+  aiWarning.hidden = !showAiControls;
+  aiDiagnostic.hidden = !showAiControls;
   downloadLink.hidden = true;
   revokeDownloadUrl();
   updateImageInfo();
 }
 
-imageInput.addEventListener('change', (event) => loadFile(event.target.files[0]));
+imageInput.addEventListener('change', function(event) { loadFile(event.target.files[0]); });
 processButton.addEventListener('click', upscaleImage);
-aiCheckButton.addEventListener('click', () => {
-  runAiDiagnostic().catch((error) => console.error(error));
+aiCheckButton.addEventListener('click', function() {
+  runAiDiagnostic().catch(function(error) { console.error(error); });
 });
-fallbackPicaButton.addEventListener('click', () => switchToPica());
+fallbackPicaButton.addEventListener('click', switchToPica);
 engineSelect.addEventListener('change', updateEngineOptions);
 
-document.querySelectorAll('input[name="scale"]').forEach((input) => {
+document.querySelectorAll('input[name="scale"]').forEach(function(input) {
   input.addEventListener('change', updateImageInfo);
 });
 
-formatSelect.addEventListener('change', () => {
+formatSelect.addEventListener('change', function() {
   qualityField.hidden = formatSelect.value !== 'image/jpeg';
   downloadLink.hidden = true;
   revokeDownloadUrl();
 });
 
-qualityInput.addEventListener('input', () => {
-  qualityOutput.textContent = `${Math.round(Number(qualityInput.value) * 100)}%`;
+qualityInput.addEventListener('input', function() {
+  qualityOutput.textContent = Math.round(Number(qualityInput.value) * 100) + '%';
 });
 
-dropZone.addEventListener('dragover', (event) => {
+dropZone.addEventListener('dragover', function(event) {
   event.preventDefault();
   dropZone.classList.add('is-dragover');
 });
 
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('is-dragover'));
+dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('is-dragover'); });
 
-dropZone.addEventListener('drop', (event) => {
+dropZone.addEventListener('drop', function(event) {
   event.preventDefault();
   dropZone.classList.remove('is-dragover');
   loadFile(event.dataTransfer.files[0]);

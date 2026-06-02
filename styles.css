@@ -95,6 +95,7 @@ dt { color: var(--muted); font-size: .85rem; }
 dd { margin: .2rem 0 0; font-weight: 800; }
 
 .scale-options { display: flex; flex-wrap: wrap; gap: .75rem; padding: 0; border: 0; margin: 0 0 1rem; }
+.scale-options[hidden] { display: none; }
 .scale-options legend { width: 100%; margin-bottom: .35rem; font-weight: 700; }
 .scale-options label { flex: 1; min-width: 150px; display: flex; gap: .5rem; align-items: center; padding: .9rem; border: 1px solid var(--border); border-radius: 14px; background: #fbfdff; cursor: pointer; }
 .scale-options label:has(input:disabled) { opacity: .55; cursor: not-allowed; }

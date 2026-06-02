@@ -55,13 +55,15 @@
         <label class="field">
           <span>Motor d’ampliació</span>
           <select id="engineSelect">
-            <option value="pica">Ràpid i estable (pica)</option>
-            <option value="ai">IA ESRGAN 2x</option>
-            <option value="oculus-auto">Objectiu Oculus/Quest automàtic</option>
+            <option value="auto" selected>Automàtic per Oculus (recomanat)</option>
+            <option value="pica">Manual: Pica (ràpid)</option>
+            <option value="ai">Manual: IA ESRGAN 2x</option>
           </select>
         </label>
 
-        <fieldset class="scale-options">
+        <div id="autoPlanDisplay" class="notice notice--info" hidden></div>
+
+        <fieldset class="scale-options" id="scaleOptions">
           <legend>Escala</legend>
           <label>
             <input type="radio" name="scale" value="2" checked />
@@ -91,7 +93,7 @@
           El mode per defecte utilitza la llibreria oberta <strong>pica</strong> per fer redimensionament d’alta qualitat al navegador. Si la CDN no respon, l’app fa servir Canvas natiu com a alternativa.
         </div>
         <div class="notice notice--warning" id="aiWarning" hidden>
-          El mode IA ESRGAN carrega TensorFlow.js, UpscalerJS i el model ESRGAN-medium 2x al navegador. Genera detalls fotorealistes però consumeix més memòria. Optimitzat per Chromebook 8 GB amb rajoles de 384 px i neteja de memòria entre rajoles. Fes la comprovació IA abans de processar.
+          ESRGAN carrega TensorFlow.js i el model IA al navegador. Genera detalls fotorealistes però consumeix més memòria. Optimitzat per Chromebook 8 GB.
         </div>
         <div class="diagnostic" id="aiDiagnostic" hidden>
           <button id="aiCheckButton" class="button button--secondary" type="button">Comprova IA 2x</button>
